@@ -103,7 +103,7 @@ if __name__ == "__main__":
                 imgs = imgs.to(device)
                 preds = model(imgs).argmax(1).cpu().numpy()
                 for i, f, p in zip(ids, filenames, preds):
-                    outputs.append([i, f, p])
+                    outputs.append([int(i), f, int(p)])
 
         df = pd.DataFrame(outputs, columns=["id", "filename", "label"])
         df.to_csv(args.out, index=False)
