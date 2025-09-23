@@ -55,7 +55,7 @@ class SegDataset(Dataset):
 # Load Model
 # ---------------------------
 def load_model(ckpt_path, problem):
-    ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=True)
+    ckpt = torch.load(ckpt_path, map_location="cpu")
 
     if problem == "p1":
         model = models.resnet50()
