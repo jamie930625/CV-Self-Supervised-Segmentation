@@ -1,207 +1,99 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-
-"""
-DLCV HW1 Inference
-- Problem 1: Classification (Setting C)
-    usage: python3 src/inference.py test.csv img_dir output.csv --ckpt setting_c.pth
-- Problem 2: Segmentation (DeepLabV3, 7 classes)
-    usage: python3 src/inference.py img_dir out_dir --ckpt Model_B.pth
-"""
-
-import os, sys, glob, types, csv
-import numpy as np
-from PIL import Image
+# src/inference.py
+import os
+import sys
 import torch
 import torch.nn as nn
-import torchvision.transforms.functional as TF
-from torchvision import models
-from torchvision.models.segmentation import deeplabv3_resnet101
+from torch.utils.data import Dataset, DataLoader
+from torchvision import transforms, models
+from PIL import Image
+import pandas as pd
+from tqdm import tqdm
 
-# -------------------------------
-# NumPy 2.x → 1.24 相容補丁
-# -------------------------------
-if "numpy._core" not in sys.modules:
-    _core = types.ModuleType("numpy._core")
-    submods = {}
-    if hasattr(np.core, "multiarray"):        submods["multiarray"] = np.core.multiarray
-    if hasattr(np.core, "umath"):             submods["umath"] = np.core.umath
-    if hasattr(np.core, "numeric"):           submods["numeric"] = np.core.numeric
-    if hasattr(np.core, "_multiarray_umath"): submods["_multiarray_umath"] = np.core._multiarray_umath
-    sys.modules["numpy._core"] = _core
-    np._core = _core
-    for name, obj in submods.items():
-        sys.modules[f"numpy._core.{name}"] = obj
-        setattr(_core, name, obj)
 
-# -------------------------------
-# 常數
-# -------------------------------
-NUM_CLASSES_P2 = 7
-MEAN = (0.485, 0.456, 0.406)
-STD  = (0.229, 0.224, 0.225)
+# ======================================================
+# Dataset（推論用）
+# ======================================================
+class OfficeHomeInferenceDataset(Dataset):
+    def __init__(self, csv_file, img_dir, transform=None):
+        df = pd.read_csv(csv_file)
+        self.filenames = df.iloc[:, 1].tolist()  # 第二欄 filename
+        self.img_dir = img_dir
+        self.transform = transform
 
-IDX2RGB = {
-    0: (0,   0,   0  ),  # background
-    1: (255, 255, 255),
-    2: (0,   0,   255),
-    3: (0,   255, 0  ),
-    4: (255, 0,   255),
-    5: (255, 255, 0  ),
-    6: (0,   255, 255),
-}
+    def __len__(self):
+        return len(self.filenames)
 
-# -------------------------------
-# 分割模型 (Problem 2)
-# -------------------------------
-def build_deeplab_resnet101_infer(num_classes=NUM_CLASSES_P2, aux_loss=True):
-    model = deeplabv3_resnet101(weights=None, aux_loss=aux_loss)
-    in_ch = model.classifier[-1].in_channels
-    model.classifier[-1] = nn.Conv2d(in_ch, num_classes, kernel_size=1)
-    if aux_loss and getattr(model, "aux_classifier", None) is not None:
-        in_ch_aux = model.aux_classifier[-1].in_channels
-        model.aux_classifier[-1] = nn.Conv2d(in_ch_aux, num_classes, kernel_size=1)
-    return model
+    def __getitem__(self, idx):
+        path = os.path.join(self.img_dir, self.filenames[idx])
+        image = Image.open(path).convert("RGB")
+        if self.transform:
+            image = self.transform(image)
+        return image, self.filenames[idx]
 
-def load_seg_model(ckpt_path: str):
-    model = build_deeplab_resnet101_infer(num_classes=NUM_CLASSES_P2, aux_loss=True)
-    ckpt = torch.load(ckpt_path, map_location="cpu")
-    state = ckpt["state_dict"] if isinstance(ckpt, dict) and "state_dict" in ckpt else ckpt
-    model.load_state_dict(state, strict=False)
-    model.eval()
-    return model
 
-# -------------------------------
-# 分類模型 (Problem 1)
-# -------------------------------
-def build_resnet50_classifier(num_classes=65):
+# ======================================================
+# 建構模型（與 Setting C 相同）
+# ======================================================
+def build_model(num_classes=65, device="cpu"):
     model = models.resnet50(weights=None)
-    in_features = model.fc.in_features
-    model.fc = nn.Linear(in_features, num_classes)
+    in_dim = model.fc.in_features
+    model.fc = nn.Linear(in_dim, num_classes)
+    model.to(device)
     return model
 
-def load_cls_model(ckpt_path: str, num_classes=65):
-    model = build_resnet50_classifier(num_classes=num_classes)
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    ckpt = torch.load(ckpt_path, map_location=device)
 
-    # 取出 state_dict
-    if isinstance(ckpt, dict) and "model_state_dict" in ckpt:
-        state = ckpt["model_state_dict"]
-    elif isinstance(ckpt, dict) and "state_dict" in ckpt:
-        state = ckpt["state_dict"]
-    else:
-        state = ckpt
-
-    # 處理常見前綴
-    def strip_prefix(k):
-        for p in ["module.", "backbone.", "model."]:
-            if k.startswith(p):
-                return k[len(p):]
-        return k
-
-    new_state = {}
-    for k, v in state.items():
-        nk = strip_prefix(k)
-        if nk.startswith("classifier."):
-            nk = nk.replace("classifier.", "fc.")
-        if nk.startswith("head."):
-            nk = nk.replace("head.", "fc.")
-        new_state[nk] = v
-
-    missing, unexpected = model.load_state_dict(new_state, strict=False)
-    if len(missing) > 0:
-        print(f"[WARN] Missing keys ({len(missing)}):", missing[:12])
-    if len(unexpected) > 0:
-        print(f"[WARN] Unexpected keys ({len(unexpected)}):", unexpected[:12])
-
-    model.eval()
-    return model
-
-# -------------------------------
-# 前處理
-# -------------------------------
-def preprocess_pil(pil_img: Image.Image) -> torch.Tensor:
-    x = TF.to_tensor(pil_img)
-    x = TF.normalize(x, mean=MEAN, std=STD)
-    return x
-
-# -------------------------------
-# Segmentation 推論
-# -------------------------------
-@torch.no_grad()
-def infer_seg(model, img_path, device):
-    pil_img = Image.open(img_path).convert("RGB")
-    H, W = pil_img.height, pil_img.width
-    x = preprocess_pil(pil_img).unsqueeze(0).to(device)
-    out = model(x)["out"]
-    pred = out.argmax(1)[0].cpu().numpy().astype(np.uint8)
-    if pred.shape != (H, W):
-        pred = np.array(Image.fromarray(pred, mode="L").resize((W, H), Image.NEAREST), dtype=np.uint8)
-    return pred
-
-def save_index_mask_as_rgb(index_mask: np.ndarray, save_path: str):
-    h, w = index_mask.shape
-    rgb = np.zeros((h, w, 3), dtype=np.uint8)
-    for idx, rgb_tuple in IDX2RGB.items():
-        rgb[index_mask == idx] = rgb_tuple
-    Image.fromarray(rgb).save(save_path)
-
-# -------------------------------
-# Classification 推論
-# -------------------------------
-@torch.no_grad()
-def infer_cls(model, csv_path, img_dir, out_csv, device):
-    import pandas as pd
-    df = pd.read_csv(csv_path)
-    results = []
-    for _, row in df.iterrows():
-        fname = row["filename"]
-        img_path = os.path.join(img_dir, fname)
-        pil_img = Image.open(img_path).convert("RGB")
-        x = preprocess_pil(pil_img).unsqueeze(0).to(device)
-        out = model(x)
-        pred = out.argmax(1).item()
-        results.append([row["id"], fname, pred])
-    with open(out_csv, "w", newline="") as f:
-        writer = csv.writer(f)
-        writer.writerow(["id", "filename", "label"])
-        writer.writerows(results)
-    print(f"Saved CSV: {out_csv}")
-
-# -------------------------------
-# Main
-# -------------------------------
+# ======================================================
+# 主程式：輸入參數 → 推論 → 輸出 CSV
+# ======================================================
 def main():
-    import argparse
-    parser = argparse.ArgumentParser()
-    parser.add_argument("arg1", type=str)
-    parser.add_argument("arg2", type=str)
-    parser.add_argument("arg3", type=str, nargs="?")
-    parser.add_argument("--ckpt", type=str, required=True)
-    args = parser.parse_args()
+    if len(sys.argv) != 4:
+        print("Usage: python src/inference.py <csv_path> <img_dir> <out_csv>")
+        sys.exit(1)
+
+    csv_path, img_dir, out_csv = sys.argv[1], sys.argv[2], sys.argv[3]
+    ckpt_path = "ckpt/settingC_best.pth"  # 由 hw1_download_ckpt.sh 下載後會放在這裡
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print("Using device:", device)
+    print(f"Using device: {device}")
 
-    if args.arg3 is not None:
-        print("Running Problem 1 (Classification)")
-        model = load_cls_model(args.ckpt).to(device)
-        infer_cls(model, args.arg1, args.arg2, args.arg3, device)
-    else:
-        print("Running Problem 2 (Segmentation)")
-        os.makedirs(args.arg2, exist_ok=True)
-        model = load_seg_model(args.ckpt).to(device)
-        img_paths = sorted(glob.glob(os.path.join(args.arg1, "*_sat.jpg")))
-        if len(img_paths) == 0:
-            print(f"[WARN] 找不到 *_sat.jpg：{args.arg1}")
-            sys.exit(0)
-        for ip in img_paths:
-            name = os.path.basename(ip).replace("_sat.jpg", "_mask.png")
-            save_path = os.path.join(args.arg2, name)
-            pred = infer_seg(model, ip, device)
-            save_index_mask_as_rgb(pred, save_path)
-            print(f"Saved: {save_path}")
+    # === Transform（與 val 相同） ===
+    transform = transforms.Compose([
+        transforms.Resize((224, 224)),
+        transforms.ToTensor(),
+        transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                             std=[0.229, 0.224, 0.225]),
+    ])
+
+    # === Dataset & Dataloader ===
+    dataset = OfficeHomeInferenceDataset(csv_path, img_dir, transform)
+    loader = DataLoader(dataset, batch_size=128, shuffle=False,
+                        num_workers=2, pin_memory=(device.type == "cuda"))
+
+    # === 載入模型 ===
+    model = build_model(num_classes=65, device=device)
+    print(f"Loading checkpoint from: {ckpt_path}")
+    state_dict = torch.load(ckpt_path, map_location="cpu")
+    model.load_state_dict(state_dict, strict=True)
+    model.eval()
+
+    # === 推論 ===
+    results = []
+    running_id = 0
+    with torch.no_grad():
+        for images, filenames in tqdm(loader, desc="Inferencing"):
+            images = images.to(device)
+            outputs = model(images)
+            preds = outputs.argmax(dim=1).cpu().tolist()
+            for fn, pred in zip(filenames, preds):
+                results.append((running_id, fn, int(pred)))
+                running_id += 1
+
+    # === 輸出 CSV ===
+    df_out = pd.DataFrame(results, columns=["id", "filename", "label"])
+    df_out.to_csv(out_csv, index=False)
+    print(f"✅ Saved predictions to {out_csv}")
+    print(df_out.head())
+
 
 if __name__ == "__main__":
     main()
