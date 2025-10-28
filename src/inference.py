@@ -12,7 +12,6 @@ import numpy as np
 from PIL import Image
 import torch
 import torch.nn as nn
-import torchvision.transforms.functional as TF
 from torchvision import models
 
 # =========================================================
@@ -59,10 +58,23 @@ def load_cls_model(ckpt_path: str, num_classes: int = 65, device: torch.device |
 # =========================================================
 # 影像前處理（維持你原本能跑的邏輯，不額外 resize）
 # =========================================================
-def preprocess_pil(pil_img: Image.Image) -> torch.Tensor:
-    x = TF.to_tensor(pil_img)
-    x = TF.normalize(x, mean=MEAN, std=STD)
-    return x
+def preprocess_pil(pil_img):
+    # 確保 RGB
+    if pil_img.mode != "RGB":
+        pil_img = pil_img.convert("RGB")
+    W, H = pil_img.size
+    C = len(pil_img.getbands())  # 應該是 3
+
+    # 直接把 PIL 影像的 bytes 轉成 torch.Tensor（不經過 numpy）
+    t = torch.frombuffer(pil_img.tobytes(), dtype=torch.uint8)
+    t = t.view(H, W, C).permute(2, 0, 1).to(torch.float32).div_(255.0)
+
+    # Normalize
+    mean = torch.tensor([0.485, 0.456, 0.406]).view(3, 1, 1)
+    std  = torch.tensor([0.229, 0.224, 0.225]).view(3, 1, 1)
+    t = (t - mean) / std
+    return t
+
 
 # =========================================================
 # 穩健讀 CSV：優先用 pandas（指定編碼/engine）；失敗則改用 csv 標準庫
