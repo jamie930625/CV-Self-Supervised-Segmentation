@@ -19,7 +19,7 @@ from torchvision import models
 from torchvision.models.segmentation import deeplabv3_resnet101
 
 # -------------------------------
-# NumPy 2.x → 1.24 相容補丁 (pickle 中用到 numpy._core.*)
+# NumPy 2.x → 1.24 相容補丁
 # -------------------------------
 if "numpy._core" not in sys.modules:
     _core = types.ModuleType("numpy._core")
@@ -82,9 +82,39 @@ def build_resnet50_classifier(num_classes=65):
 
 def load_cls_model(ckpt_path: str, num_classes=65):
     model = build_resnet50_classifier(num_classes=num_classes)
-    ckpt = torch.load(ckpt_path, map_location="cpu")
-    state = ckpt["state_dict"] if isinstance(ckpt, dict) and "state_dict" in ckpt else ckpt
-    model.load_state_dict(state, strict=False)
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    ckpt = torch.load(ckpt_path, map_location=device)
+
+    # 取出 state_dict
+    if isinstance(ckpt, dict) and "model_state_dict" in ckpt:
+        state = ckpt["model_state_dict"]
+    elif isinstance(ckpt, dict) and "state_dict" in ckpt:
+        state = ckpt["state_dict"]
+    else:
+        state = ckpt
+
+    # 處理常見前綴
+    def strip_prefix(k):
+        for p in ["module.", "backbone.", "model."]:
+            if k.startswith(p):
+                return k[len(p):]
+        return k
+
+    new_state = {}
+    for k, v in state.items():
+        nk = strip_prefix(k)
+        if nk.startswith("classifier."):
+            nk = nk.replace("classifier.", "fc.")
+        if nk.startswith("head."):
+            nk = nk.replace("head.", "fc.")
+        new_state[nk] = v
+
+    missing, unexpected = model.load_state_dict(new_state, strict=False)
+    if len(missing) > 0:
+        print(f"[WARN] Missing keys ({len(missing)}):", missing[:12])
+    if len(unexpected) > 0:
+        print(f"[WARN] Unexpected keys ({len(unexpected)}):", unexpected[:12])
+
     model.eval()
     return model
 
@@ -125,7 +155,7 @@ def infer_cls(model, csv_path, img_dir, out_csv, device):
     import pandas as pd
     df = pd.read_csv(csv_path)
     results = []
-    for idx, row in df.iterrows():
+    for _, row in df.iterrows():
         fname = row["filename"]
         img_path = os.path.join(img_dir, fname)
         pil_img = Image.open(img_path).convert("RGB")
@@ -145,22 +175,19 @@ def infer_cls(model, csv_path, img_dir, out_csv, device):
 def main():
     import argparse
     parser = argparse.ArgumentParser()
-    parser.add_argument("arg1", type=str, help="Problem1: test.csv | Problem2: img_dir")
-    parser.add_argument("arg2", type=str, help="Problem1: img_dir | Problem2: out_dir")
-    parser.add_argument("arg3", type=str, nargs="?", help="Problem1: output.csv | Problem2: (unused)")
-    parser.add_argument("--ckpt", type=str, required=True, help="path to checkpoint")
+    parser.add_argument("arg1", type=str)
+    parser.add_argument("arg2", type=str)
+    parser.add_argument("arg3", type=str, nargs="?")
+    parser.add_argument("--ckpt", type=str, required=True)
     args = parser.parse_args()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print("Using device:", device)
 
-    # Problem 1: 三個位置參數
     if args.arg3 is not None:
         print("Running Problem 1 (Classification)")
         model = load_cls_model(args.ckpt).to(device)
         infer_cls(model, args.arg1, args.arg2, args.arg3, device)
-
-    # Problem 2: 兩個位置參數
     else:
         print("Running Problem 2 (Segmentation)")
         os.makedirs(args.arg2, exist_ok=True)
@@ -178,4 +205,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
