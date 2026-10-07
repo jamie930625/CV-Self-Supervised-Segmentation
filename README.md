@@ -1,27 +1,54 @@
-# Self-Supervised Representation Learning & Semantic Segmentation
+# Self-Supervised Pre-training and Semantic Segmentation
 
-This repository contains two main computer vision projects focusing on feature representation learning without labels and dense pixel-level prediction. 
+Course project for NTU Deep Learning for Computer Vision (Fall 2025), HW1. The full report is in `hw1_b11103049.pdf`.
 
-## Part 1: Self-Supervised Pre-training (DINO)
-In this section, I implemented **DINO** (Self-Distillation with No Labels) to pre-train a ResNet50 backbone on the Mini-ImageNet dataset. The learned visual representations were then evaluated on the Office-Home dataset for downstream image classification.
+## Part 1: Self-supervised pre-training with DINO
 
-### Key Highlights:
-- **Architecture**: ResNet50 backbone pre-trained entirely from scratch without supervision.
-- **Evaluation**: Fine-tuned a classifier on the frozen backbone and achieved robust classification accuracy.
-- **Visualization**: Leveraged t-SNE to visualize the clustering capability of the learned representations in high-dimensional space.
+I implemented **DINO** (self-distillation with no labels) and pre-trained a ResNet-50 backbone from scratch on Mini-ImageNet, then fine-tuned it for image classification on Office-Home.
 
-## Part 2: Semantic Segmentation on Satellite Imagery
-The second part focuses on segmenting geographic regions (e.g., urban, agriculture, water) from aerial satellite images. 
+- Multi-crop augmentation (2 global and 4 local crops), color jitter, Gaussian blur, and solarization; cosine learning-rate schedule with warm-up.
+- t-SNE visualization of the learned features at the first and last epochs.
 
-### Key Highlights:
-- **Baseline Model**: Developed a standard **U-Net** architecture from scratch.
-- **Improved Architecture**: Implemented an advanced CNN-based segmentation model (e.g., DeepLab / FCN) to handle multi-scale context, significantly improving the Mean Intersection over Union (mIoU).
-- **Foundation Model Application**: Utilized Meta's **Segment Anything Model (SAM)** to perform zero-shot segmentation and compared the performance with fully supervised models.
+**Office-Home classification accuracy**
 
-## Environment Setup
-To reproduce the environment and run the inference scripts:
+| Setting | Backbone initialization | Fine-tuning | Accuracy |
+|---|---|---|---|
+| A | random | full | 0.31 |
+| B | DINO on ImageNet-1k (provided weights) | full | 0.82 |
+| C | **my DINO pre-training on Mini-ImageNet** | full | **0.73** |
+| D | DINO on ImageNet-1k (provided weights) | classifier only | 0.79 |
+| E | **my DINO pre-training on Mini-ImageNet** | classifier only | 0.69 |
+
+Self-supervised pre-training lifts accuracy from 0.31 (random) to 0.73 without any labels, and full fine-tuning adds 3 to 4 points over a frozen backbone.
+
+## Part 2: Semantic segmentation of satellite images
+
+Seven-class land-cover segmentation (urban, agriculture, water, and others) on aerial images.
+
+| Model | mIoU |
+|---|---|
+| U-Net, implemented from scratch (baseline) | 0.53 |
+| **DeepLabV3+ with ResNet-101** | **0.76** |
+
+- Ablation: removing U-Net skip connections lowers mIoU, since high-resolution spatial detail is lost.
+- Applied the **Segment Anything Model (SAM)** zero-shot to validation images and compared it with the supervised models.
+
+## Files
+
+```text
+src/train.py           # training for both problems
+src/inference.py       # inference and CSV / mask output
+hw1_1.sh, hw1_2.sh     # inference entry points
+hw1_download_ckpt.sh   # downloads the trained checkpoints
+mean_iou_evaluate.py   # mIoU evaluation (provided with the assignment)
+viz_mask.py            # mask visualization
+```
+
+## Environment
+
 ```bash
 conda create -n cv_env python=3.8
 conda activate cv_env
 pip install torch==2.4.0 torchvision==0.19.0
 pip install -r requirements.txt
+```

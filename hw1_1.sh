@@ -11,8 +11,8 @@ if [ -f ckpt/settingC_best.pth ]; then
 elif [ -f ckpt/settingC.pth ]; then
   CKPT="ckpt/settingC.pth"
 else
-  echo "❌ Cannot find checkpoint in ckpt/. Expected settingC_best.pth or settingC.pth"; exit 1
+  echo "Cannot find checkpoint in ckpt/. Expected settingC_best.pth or settingC.pth"; exit 1
 fi
 echo "Using checkpoint: $CKPT"
 python3 src/inference.py "$1" "$2" "$3" --ckpt "$CKPT"
-echo "✅ Inference completed successfully!"
+echo "Inference completed successfully!"

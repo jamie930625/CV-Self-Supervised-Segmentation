@@ -15,7 +15,7 @@ import torch.nn as nn
 from torchvision import models
 
 # =========================================================
-# NumPy 2.x 相容補丁（修復舊路徑 numpy._core.*，避免奇怪的 pandas / pickle 兼容問題）
+# NumPy 2.x compatibility shim for numpy._core.* paths (pandas / pickle)
 # =========================================================
 if "numpy._core" not in sys.modules:
     _core = types.ModuleType("numpy._core")
@@ -31,13 +31,13 @@ if "numpy._core" not in sys.modules:
         setattr(_core, name, obj)
 
 # =========================================================
-# 常數（與你可跑版本一致）
+# constants
 # =========================================================
 MEAN = (0.485, 0.456, 0.406)
 STD  = (0.229, 0.224, 0.225)
 
 # =========================================================
-# 模型構建 / 載入（與 Setting C 一致）
+# build and load the model (Setting C)
 # =========================================================
 def build_resnet50_classifier(num_classes: int = 65) -> nn.Module:
     model = models.resnet50(weights=None)
@@ -48,7 +48,7 @@ def build_resnet50_classifier(num_classes: int = 65) -> nn.Module:
 def load_cls_model(ckpt_path: str, num_classes: int = 65, device: torch.device | str = "cpu") -> nn.Module:
     model = build_resnet50_classifier(num_classes=num_classes)
     ckpt = torch.load(ckpt_path, map_location="cpu")
-    # 同時支援 {'state_dict': ...} 或純 state_dict；strict=False 提升相容性
+    # accept {'state_dict': ...} or a plain state_dict; strict=False for compatibility
     state = ckpt["state_dict"] if isinstance(ckpt, dict) and "state_dict" in ckpt else ckpt
     model.load_state_dict(state, strict=False)
     model.to(device)
@@ -56,16 +56,16 @@ def load_cls_model(ckpt_path: str, num_classes: int = 65, device: torch.device |
     return model
 
 # =========================================================
-# 影像前處理（維持你原本能跑的邏輯，不額外 resize）
+# image preprocessing (no extra resizing)
 # =========================================================
 def preprocess_pil(pil_img):
-    # 確保 RGB
+    # ensure RGB
     if pil_img.mode != "RGB":
         pil_img = pil_img.convert("RGB")
     W, H = pil_img.size
-    C = len(pil_img.getbands())  # 應該是 3
+    C = len(pil_img.getbands())
 
-    # 直接把 PIL 影像的 bytes 轉成 torch.Tensor（不經過 numpy）
+    # convert PIL bytes to a torch.Tensor directly (without numpy)
     t = torch.frombuffer(pil_img.tobytes(), dtype=torch.uint8)
     t = t.view(H, W, C).permute(2, 0, 1).to(torch.float32).div_(255.0)
 
@@ -77,20 +77,20 @@ def preprocess_pil(pil_img):
 
 
 # =========================================================
-# 穩健讀 CSV：優先用 pandas（指定編碼/engine）；失敗則改用 csv 標準庫
-#   - 回傳：[(id, filename), ...]，保持輸入的 id（與你已測通版本一致）
+# read the CSV with pandas, falling back to the csv module
+#   returns [(id, filename), ...] with the input ids unchanged
 # =========================================================
 def read_id_and_filename_list(csv_path: str) -> list[tuple[int, str]]:
     rows: list[tuple[int, str]] = []
     try:
-        import pandas as pd  # 放在 shim 之後 import，避免 numpy 2.x 相容性雷
+        import pandas as pd  # imported after the shim for numpy 2.x compatibility
         df = pd.read_csv(csv_path, encoding="utf-8-sig", sep=",", engine="python")
-        # 優先依欄名存取；若沒有欄名就 fall back 到位置
+        # use column names if present, otherwise column positions
         if all(c in df.columns for c in ["id", "filename"]):
             ids = df["id"].tolist()
             fns = df["filename"].astype(str).tolist()
         else:
-            # 位置：第 0 欄視為 id、第 1 欄視為 filename
+            # column 0 is the id, column 1 is the filename
             ids = df.iloc[:, 0].tolist()
             fns = df.iloc[:, 1].astype(str).tolist()
         for _id, _fn in zip(ids, fns):
@@ -102,13 +102,13 @@ def read_id_and_filename_list(csv_path: str) -> list[tuple[int, str]]:
         print(f"[WARN] pandas read_csv failed, fallback to csv module. reason: {e}")
         with open(csv_path, "r", encoding="utf-8-sig", newline="") as f:
             reader = csv.reader(f)
-            header = next(reader, None)  # 丟表頭
+            header = next(reader, None)  # skip the header
             for r in reader:
                 if len(r) >= 2:
                     try:
                         rid = int(r[0])
                     except Exception:
-                        # 若第一欄不是整數，嘗試跳過
+                        # skip rows whose first column is not an integer
                         continue
                     rows.append((rid, str(r[1]).strip()))
         if len(rows) == 0:
@@ -116,8 +116,8 @@ def read_id_and_filename_list(csv_path: str) -> list[tuple[int, str]]:
         return rows
 
 # =========================================================
-# 推論主流程：逐張處理（避免 DataLoader/多進程小雷）
-#   - 依輸入 CSV 的 id 原樣輸出（與你的可跑版一致）
+# main inference loop: one image at a time (no DataLoader workers)
+#   outputs use the ids from the input CSV
 # =========================================================
 @torch.no_grad()
 def infer_cls(model: nn.Module, csv_path: str, img_dir: str, out_csv: str, device: torch.device):
@@ -130,7 +130,7 @@ def infer_cls(model: nn.Module, csv_path: str, img_dir: str, out_csv: str, devic
 
         for _id, fname in pairs:
             img_path = os.path.join(img_dir, fname)
-            # 容錯：若檔案不存在，直接跳過或報警（這裡選擇報警並跳過）
+            # warn and skip missing files
             if not os.path.isfile(img_path):
                 print(f"[WARN] file not found: {img_path} (skip)")
                 continue
@@ -140,7 +140,7 @@ def infer_cls(model: nn.Module, csv_path: str, img_dir: str, out_csv: str, devic
             pred = out.argmax(1).item()
             writer.writerow([_id, fname, int(pred)])
 
-    print(f"✅ Saved CSV: {out_csv}")
+    print(f"Saved CSV: {out_csv}")
 
 # =========================================================
 # Main

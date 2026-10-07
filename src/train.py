@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 DLCV HW1 Train Script
-包含 Problem 1 (Set C 分類, ResNet50) 與 Problem 2 (Model B 分割, DeepLabV3+ ResNet101)
+Problem 1: Setting C classification (ResNet-50). Problem 2: Model B segmentation (DeepLabV3+ with ResNet-101).
 """
 
 import os
@@ -113,7 +113,7 @@ def train_problem1(train_csv, val_csv, train_dir, val_dir, save_path="setC_best_
         if val_acc > best_val_acc:
             best_val_acc = val_acc
             torch.save(model.state_dict(), save_path)
-            print(f"✅ Saved best P1 model at epoch {epoch+1} (Val Acc={best_val_acc:.4f})")
+            print(f"Saved best P1 model at epoch {epoch+1} (Val Acc={best_val_acc:.4f})")
 
 
 # ============================================================
@@ -215,7 +215,7 @@ def train_problem2(args: Args):
             loss.backward()
             optimizer.step()
 
-        # 簡單 validation
+        # validation
         model.eval()
         correct, total = 0, 0
         with torch.no_grad():
@@ -228,12 +228,12 @@ def train_problem2(args: Args):
         acc = correct / total
         print(f"[P2 Epoch {epoch}] Val Pixel Acc: {acc:.4f}")
 
-        # 存最好模型
+        # save the best model
         if acc > best_miou:
             best_miou = acc
             torch.save({'epoch':epoch, 'state_dict':model.state_dict(), 'best_mIoU':best_miou},
                        os.path.join(args.save_dir, "best_mIoU.pth"))
-            print(f"✅ Saved best P2 model at epoch {epoch} (Pixel Acc={acc:.4f})")
+            print(f"Saved best P2 model at epoch {epoch} (Pixel Acc={acc:.4f})")
 
 
 # ============================================================
@@ -248,14 +248,14 @@ if __name__ == "__main__":
     args_in = parser.parse_args()
 
     if args_in.problem == 1:
-        # 範例用法: python3 train.py --problem 1
+        # usage: python3 train.py --problem 1
         train_csv = "data_2025/p1_data/office/train.csv"
         val_csv   = "data_2025/p1_data/office/val.csv"
         train_dir = "data_2025/p1_data/office/train"
         val_dir   = "data_2025/p1_data/office/val"
         train_problem1(train_csv, val_csv, train_dir, val_dir)
     else:
-        # 範例用法: python3 train.py --problem 2 --train_root ... --val_root ...
+        # usage: python3 train.py --problem 2 --train_root ... --val_root ...
         args = Args(train_root=args_in.train_root, val_root=args_in.val_root, save_dir=args_in.save_dir)
         train_problem2(args)
 
